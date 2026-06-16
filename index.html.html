@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="keywords" content="image editor, blur background, focus photo, online tool, free">
+    <title>Advanced Image Focus Editor</title>
+    <meta name="description" content="A free, browser-based tool to apply custom background blur to your images.">
+    <style>
+        body {
+            font-family: sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background-color: #f4f4f9;
+            margin: 0;
+            padding: 20px;
+            color: #333;
+        }
+        #controls {
+            margin-bottom: 20px;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            max-width: 650px;
+            width: 100%;
+        }
+        .control-group {
+            display: flex;
+            flex-direction: column;
+        }
+        .control-group.full-width {
+            grid-column: span 2;
+        }
+        label {
+            font-weight: bold;
+            margin-bottom: 5px;
+            font-size: 14px;
+        }
+        .radio-group {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            height: 100%;
+        }
+        canvas {
+            border: 1px solid #ccc;
+            cursor: crosshair;
+            background-color: white;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+            max-width: 100%;
+        }
+        .instruction {
+            color: #555;
+            font-size: 13px;
+            margin-top: 5px;
+        }
+        button {
+            padding: 12px;
+            background-color: #0056b3;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        button:hover:not(:disabled) {
+            background-color: #003d82;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="controls">
+        <div class="control-group full-width">
+            <label for="upload">1. Select an Image:</label>
+            <input type="file" id="upload" accept="image/*">
+            <div class="instruction">Once uploaded, click and drag over the image to keep that area clear.</div>
+        </div>
+        
+        <div class="control-group">
+            <label>2. Focus Shape:</label>
+            <div class="radio-group">
+                <label><input type="radio" name="shape" value="rectangle" checked> Rectangle</label>
+                <label><input type="radio" name="shape" value="circle"> Circle</label>
+                <label><input type="radio" name="shape" value="freehand"> Freehand</label>
+            </div>
+        </div>
+
+        <div class="control-group">
+            <label for="bg-blur">3. Background Blur Intensity:</label>
+            <input type="range" id="bg-blur" min="0" max="50" value="12">
+        </div>
+
+        <div class="control-group full-width">
+            <label for="feather">4. Edge Smoothness (Feather / Radial Blur):</label>
+            <input type="range" id="feather" min="0" max="150" value="15">
+        </div>
+
+        <div class="control-group full-width">
+            <button id="save-btn" disabled>Save Edited Image</button>
+        </div>
+    </div>
+
+    <canvas id="canvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        
+        const maskCanvas = document.createElement('canvas');
+        const maskCtx = maskCanvas.getContext('2d');
+        const sharpCanvas = document.createElement('canvas');
+        const sharpCtx = sharpCanvas.getContext('2d');
+
+        const upload = document.getElementById('upload');
+        const featherInput = document.getElementById('feather');
+        const bgBlurInput = document.getElementById('bg-blur');
+        const shapeInputs = document.getElementsByName('shape');
+        const saveBtn = document.getElementById('save-btn');
+
+        let img = new Image();
+        let isDrawing = false;
+        let currentSelection = null;
+        let points = []; 
+
+        function getSelectedShape() {
+            for (let radio of shapeInputs) {
+                if (radio.checked) return radio.value;
+            }
+            return 'rectangle';
+        }
+
+        upload.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                img = new Image(); // Create a fresh instance to avoid caching errors
+                
+                img.onload = () => {
+                    const MAX_SIZE = 1200;
+                    let w = img.width;
+                    let h = img.height;
+                    
+                    if (w > MAX_SIZE || h > MAX_SIZE) {
+                        const ratio = Math.min(MAX_SIZE / w, MAX_SIZE / h);
+                        w *= ratio;
+                        h *= ratio;
+                    }
+
+                    // Force whole numbers. Decimals can cause the canvas to crash.
+                    w = Math.round(w);
+                    h = Math.round(h);
+
+                    canvas.width = maskCanvas.width = sharpCanvas.width = w;
+                    canvas.height = maskCanvas.height = sharpCanvas.height = h;
+                    
+                    currentSelection = null;
+                    points = [];
+                    saveBtn.disabled = false;
+                    render();
+                };
+                
+                img.onerror = () => {
+                    alert("Error loading image. The file format may be unsupported by your browser (e.g., HEIC). Please try a standard JPG or PNG file.");
+                };
+                
+                img.src = event.target.result;
+            }
+            reader.readAsDataURL(file);
+        });
+
+        saveBtn.addEventListener('click', () => {
+            if (!img.src) return;
+            const dataURL = canvas.toDataURL('image/png');
+            const link = document.createElement('a');
+            link.download = 'focused-image.png';
+            link.href = dataURL;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        });
+
+        [featherInput, bgBlurInput].forEach(el => el.addEventListener('input', () => {
+            if (img.src) render(currentSelection, !isDrawing);
+        }));
+        shapeInputs.forEach(el => el.addEventListener('change', () => {
+            if (img.src) render(currentSelection, !isDrawing);
+        }));
+
+        canvas.addEventListener('mousedown', (e) => {
+            if (!img.src || !canvas.width) return;
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+            const currentX = (e.clientX - rect.left) * scaleX;
+            const currentY = (e.clientY - rect.top) * scaleY;
+            
+            if (getSelectedShape() === 'freehand') {
+                points = [{x: currentX, y: currentY}];
+                currentSelection = null;
+            } else {
+                currentSelection = {
+                    startX: currentX,
+                    startY: currentY,
+                    endX: currentX,
+                    endY: currentY
+                };
+                points = [];
+            }
+            isDrawing = true;
+        });
+
+        canvas.addEventListener('mousemove', (e) => {
+            if (!isDrawing) return;
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+            const currentX = (e.clientX - rect.left) * scaleX;
+            const currentY = (e.clientY - rect.top) * scaleY;
+            
+            if (getSelectedShape() === 'freehand') {
+                points.push({x: currentX, y: currentY});
+                render(null, false);
+            } else {
+                currentSelection.endX = currentX;
+                currentSelection.endY = currentY;
+                render(currentSelection, false);
+            }
+        });
+
+        canvas.addEventListener('mouseup', () => {
+            if (!isDrawing) return;
+            isDrawing = false;
+            render(currentSelection, true);
+        });
+
+        canvas.addEventListener('mouseleave', () => {
+            if (isDrawing) {
+                isDrawing = false;
+                render(currentSelection, true);
+            }
+        });
+
+        function render(sel = currentSelection, finalize = true) {
+            if (!img.src || !canvas.width) return;
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            const shape = getSelectedShape();
+
+            if (shape === 'freehand') {
+                if (points.length < 2) {
+                    ctx.filter = 'none';
+                    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                    return;
+                }
+            } else {
+                if (!sel || (sel.startX === sel.endX && sel.startY === sel.endY)) {
+                    ctx.filter = 'none';
+                    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                    return;
+                }
+            }
+
+            const bgBlur = bgBlurInput.value;
+            const feather = featherInput.value;
+
+            ctx.filter = `blur(${bgBlur}px)`;
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            ctx.filter = 'none';
+
+            maskCtx.clearRect(0, 0, maskCanvas.width, maskCanvas.height);
+            maskCtx.filter = `blur(${feather}px)`;
+            maskCtx.fillStyle = 'white';
+            maskCtx.beginPath();
+            
+            let x, y, w, h, r;
+            if (shape === 'rectangle') {
+                x = Math.min(sel.startX, sel.endX);
+                y = Math.min(sel.startY, sel.endY);
+                w = Math.abs(sel.endX - sel.startX);
+                h = Math.abs(sel.endY - sel.startY);
+                maskCtx.rect(x, y, w, h);
+            } else if (shape === 'circle') {
+                r = Math.hypot(sel.endX - sel.startX, sel.endY - sel.startY);
+                maskCtx.arc(sel.startX, sel.startY, r, 0, Math.PI * 2);
+            } else if (shape === 'freehand') {
+                maskCtx.moveTo(points[0].x, points[0].y);
+                for (let i = 1; i < points.length; i++) {
+                    maskCtx.lineTo(points[i].x, points[i].y);
+                }
+                maskCtx.closePath();
+            }
+            maskCtx.fill();
+
+            sharpCtx.clearRect(0, 0, sharpCanvas.width, sharpCanvas.height);
+            sharpCtx.drawImage(img, 0, 0, sharpCanvas.width, sharpCanvas.height);
+            sharpCtx.globalCompositeOperation = 'destination-in';
+            sharpCtx.drawImage(maskCanvas, 0, 0);
+            sharpCtx.globalCompositeOperation = 'source-over'; 
+
+            ctx.drawImage(sharpCanvas, 0, 0);
+
+            if (!finalize) {
+                ctx.strokeStyle = 'red';
+                ctx.lineWidth = 2;
+                ctx.setLineDash([5, 5]);
+                ctx.beginPath();
+                if (shape === 'rectangle') {
+                    ctx.rect(x, y, w, h);
+                } else if (shape === 'circle') {
+                    ctx.arc(sel.startX, sel.startY, r, 0, Math.PI * 2);
+                } else if (shape === 'freehand') {
+                    ctx.moveTo(points[0].x, points[0].y);
+                    for (let i = 1; i < points.length; i++) {
+                        ctx.lineTo(points[i].x, points[i].y);
+                    }
+                    ctx.closePath();
+                }
+                ctx.stroke();
+            }
+        }
+    </script>
+</body>
+</html>
